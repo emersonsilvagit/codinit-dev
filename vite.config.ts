@@ -5,71 +5,37 @@ import { nodePolyfills } from 'vite-plugin-node-polyfills';
 import { optimizeCssModules } from 'vite-plugin-optimize-css-modules';
 import tsconfigPaths from 'vite-tsconfig-paths';
 import * as dotenv from 'dotenv';
-import { execSync } from 'child_process';
-import { readFileSync } from 'fs';
-import { join } from 'path';
 
 dotenv.config();
 
-// Get detailed git info with fallbacks
-const getGitInfo = () => {
-  try {
-    return {
-      commitHash: execSync('git rev-parse --short HEAD').toString().trim(),
-      branch: execSync('git rev-parse --abbrev-ref HEAD').toString().trim(),
-      commitTime: execSync('git log -1 --format=%cd').toString().trim(),
-      author: execSync('git log -1 --format=%an').toString().trim(),
-      email: execSync('git log -1 --format=%ae').toString().trim(),
-      remoteUrl: execSync('git config --get remote.origin.url').toString().trim(),
-      repoName: execSync('git config --get remote.origin.url')
-        .toString()
-        .trim()
-        .replace(/^.*github.com[:/]/, '')
-        .replace(/\.git$/, ''),
-    };
-  } catch {
-    return {
-      commitHash: 'no-git-info',
-      branch: 'unknown',
-      commitTime: 'unknown',
-      author: 'unknown',
-      email: 'unknown',
-      remoteUrl: 'unknown',
-      repoName: 'unknown',
-    };
-  }
+// ===== Build-time safe Git info =====
+const gitInfo = {
+  commitHash: process.env.VERCEL_GIT_COMMIT_SHA || 'no-git-info',
+  branch: process.env.VERCEL_GIT_COMMIT_REF || 'unknown',
+  commitTime: process.env.VERCEL_GIT_COMMIT_TIMESTAMP || 'unknown',
+  author: process.env.VERCEL_GIT_COMMIT_AUTHOR_NAME || 'unknown',
+  email: process.env.VERCEL_GIT_COMMIT_AUTHOR_EMAIL || 'unknown',
+  remoteUrl: process.env.VERCEL_GIT_REPO_URL || 'unknown',
+  repoName: process.env.VERCEL_GIT_REPO_SLUG || 'unknown',
 };
 
-// Read package.json with detailed dependency info
-const getPackageJson = () => {
-  try {
-    const pkgPath = join(process.cwd(), 'package.json');
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
-
-    return {
-      name: pkg.name,
-      description: pkg.description,
-      license: pkg.license,
-      dependencies: pkg.dependencies || {},
-      devDependencies: pkg.devDependencies || {},
-      peerDependencies: pkg.peerDependencies || {},
-      optionalDependencies: pkg.optionalDependencies || {},
-    };
-  } catch {
-    return {
-      name: 'codinit.dev',
-      description: 'A LLM interface',
-      license: 'MIT',
-      dependencies: {},
-      devDependencies: {},
-      peerDependencies: {},
-      optionalDependencies: {},
-    };
-  }
+// ===== Package.json info =====
+// Safe fallback in case we cannot read package.json at runtime
+let pkg = {
+  name: 'codinit.dev',
+  description: 'A LLM interface',
+  license: 'MIT',
+  dependencies: {},
+  devDependencies: {},
+  peerDependencies: {},
+  optionalDependencies: {},
 };
 
-const pkg = getPackageJson();
-const gitInfo = getGitInfo();
+try {
+  pkg = require('./package.json'); // Bundled at build-time
+} catch {
+  // Keep default
+}
 
 export default defineConfig((config) => {
   return {
@@ -81,14 +47,14 @@ export default defineConfig((config) => {
       __GIT_EMAIL: JSON.stringify(gitInfo.email),
       __GIT_REMOTE_URL: JSON.stringify(gitInfo.remoteUrl),
       __GIT_REPO_NAME: JSON.stringify(gitInfo.repoName),
-      __APP_VERSION: JSON.stringify(process.env.npm_package_version),
+      __APP_VERSION: JSON.stringify(process.env.npm_package_version || '0.0.0'),
       __PKG_NAME: JSON.stringify(pkg.name),
       __PKG_DESCRIPTION: JSON.stringify(pkg.description),
       __PKG_LICENSE: JSON.stringify(pkg.license),
-      __PKG_DEPENDENCIES: JSON.stringify(pkg.dependencies),
-      __PKG_DEV_DEPENDENCIES: JSON.stringify(pkg.devDependencies),
-      __PKG_PEER_DEPENDENCIES: JSON.stringify(pkg.peerDependencies),
-      __PKG_OPTIONAL_DEPENDENCIES: JSON.stringify(pkg.optionalDependencies),
+      __PKG_DEPENDENCIES: JSON.stringify(pkg.dependencies || {}),
+      __PKG_DEV_DEPENDENCIES: JSON.stringify(pkg.devDependencies || {}),
+      __PKG_PEER_DEPENDENCIES: JSON.stringify(pkg.peerDependencies || {}),
+      __PKG_OPTIONAL_DEPENDENCIES: JSON.stringify(pkg.optionalDependencies || {}),
       'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV),
     },
     build: {
@@ -96,7 +62,7 @@ export default defineConfig((config) => {
     },
     plugins: [
       nodePolyfills({
-        include: ['buffer', 'process', 'util', 'stream', 'path'], // Exclude 'crypto' from polyfills
+        include: ['buffer', 'process', 'util', 'stream', 'path'],
         globals: {
           Buffer: true,
           process: true,
@@ -114,10 +80,10 @@ export default defineConfig((config) => {
               map: null,
             };
           }
-
           return null;
         },
       },
+      // Only use Cloudflare dev proxy locally
       config.mode !== 'test' && !process.env.VERCEL && remixCloudflareDevProxy(),
       remixVitePlugin({
         future: {
@@ -164,7 +130,6 @@ function chrome129IssuePlugin() {
             res.end(
               `<html><body><h1>Unsupported Browser Version</h1><p>Chrome version 129 has a known issue that affects this application. Please downgrade to version 128 or upgrade to version 130 or later.</p></body></html>`,
             );
-
             return;
           }
         }
